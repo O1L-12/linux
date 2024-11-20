@@ -1,0 +1,40 @@
+name: Linux Kernel Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest  
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libncurses-dev \
+          bison \
+          flex \
+          libssl-dev \
+          libelf-dev \
+          ccache
+
+    - name: Configure kernel
+      run: |
+        make ARCH=x86_64 defconfig  # Default configuration
+
+    - name: Build kernel
+      run: |
+        make ARCH=x86_64 defconfig  # Parallel build using all available CPU cores
+
+    - name: Archive build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: linux-kernel-build
+        path: |
+          vmlinux  # Kernel image
+          arch/x86/boot/bzImage  # Bootable image for x86 (adjust for architecture)
