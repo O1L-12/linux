@@ -34,7 +34,7 @@ jobs:
     - name: Archive build artifacts
       uses: actions/upload-artifact@v3
       with:
-        name: linux-kernel-build
-        path: |
-          vmlinux  # Kernel image
-          arch/x86/boot/bzImage  # Bootable image for x86 (adjust for architecture)
+          name: linux-kernel-build
+          path: |
+            **/vmlinux
+            **/bzImage
