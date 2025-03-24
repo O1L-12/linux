@@ -406,7 +406,7 @@ static long bch2_ioctl_subvolume_create(struct bch_fs *c, struct file *filp,
 		sync_inodes_sb(c->vfs_sb);
 		up_read(&c->vfs_sb->s_umount);
 	}
-retry:
+
 	if (arg.src_ptr) {
 		error = user_path_at(arg.dirfd,
 				(const char __user *)(unsigned long)arg.src_ptr,
@@ -486,11 +486,6 @@ err3:
 err2:
 	if (arg.src_ptr)
 		path_put(&src_path);
-
-	if (retry_estale(error, lookup_flags)) {
-		lookup_flags |= LOOKUP_REVAL;
-		goto retry;
-	}
 err1:
 	return error;
 }
@@ -514,10 +509,6 @@ static long bch2_ioctl_subvolume_destroy(struct bch_fs *c, struct file *filp,
 	dir = d_inode(path.dentry);
 	if (victim->d_sb->s_fs_info != c) {
 		ret = -EXDEV;
-		goto err;
-	}
-	if (!d_is_positive(victim)) {
-		ret = -ENOENT;
 		goto err;
 	}
 	ret = __bch2_unlink(dir, victim, true);

@@ -8,7 +8,7 @@
 	COMMON_FILE_SOCK_PERMS, "unlink", "link", "rename", "execute",   \
 		"quotaon", "mounton", "audit_access", "open", "execmod", \
 		"watch", "watch_mount", "watch_sb", "watch_with_perm",   \
-		"watch_reads"
+		"watch_reads", "watch_mountns"
 
 #define COMMON_SOCK_PERMS                                              \
 	COMMON_FILE_SOCK_PERMS, "bind", "connect", "listen", "accept", \
@@ -179,7 +179,7 @@ const struct security_class_mapping secclass_map[] = {
 	{ "anon_inode", { COMMON_FILE_PERMS, NULL } },
 	{ "io_uring", { "override_creds", "sqpoll", "cmd", NULL } },
 	{ "user_namespace", { "create", NULL } },
-	{ NULL }
+	/* last one */ { NULL, {} }
 };
 
 #ifdef __KERNEL__ /* avoid this check when building host programs */
