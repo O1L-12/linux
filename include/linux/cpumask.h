@@ -609,6 +609,18 @@ void __cpumask_set_cpu(unsigned int cpu, struct cpumask *dstp)
 	__set_bit(cpumask_check(cpu), cpumask_bits(dstp));
 }
 
+/**
+ * cpumask_clear_cpus - clear cpus in a cpumask
+ * @dstp:  the cpumask pointer
+ * @cpu:   cpu number (< nr_cpu_ids)
+ * @ncpus: number of cpus to clear (< nr_cpu_ids)
+ */
+static __always_inline void cpumask_clear_cpus(struct cpumask *dstp,
+						unsigned int cpu, unsigned int ncpus)
+{
+	cpumask_check(cpu + ncpus - 1);
+	bitmap_clear(cpumask_bits(dstp), cpumask_check(cpu), ncpus);
+}
 
 /**
  * cpumask_clear_cpu - clear a cpu in a cpumask
@@ -623,22 +635,6 @@ static __always_inline void cpumask_clear_cpu(int cpu, struct cpumask *dstp)
 static __always_inline void __cpumask_clear_cpu(int cpu, struct cpumask *dstp)
 {
 	__clear_bit(cpumask_check(cpu), cpumask_bits(dstp));
-}
-
-/**
- * cpumask_assign_cpu - assign a cpu in a cpumask
- * @cpu: cpu number (< nr_cpu_ids)
- * @dstp: the cpumask pointer
- * @bool: the value to assign
- */
-static __always_inline void cpumask_assign_cpu(int cpu, struct cpumask *dstp, bool value)
-{
-	assign_bit(cpumask_check(cpu), cpumask_bits(dstp), value);
-}
-
-static __always_inline void __cpumask_assign_cpu(int cpu, struct cpumask *dstp, bool value)
-{
-	__assign_bit(cpumask_check(cpu), cpumask_bits(dstp), value);
 }
 
 /**
@@ -1140,6 +1136,9 @@ void init_cpu_possible(const struct cpumask *src);
 
 #define assign_cpu(cpu, mask, val)	\
 	assign_bit(cpumask_check(cpu), cpumask_bits(mask), (val))
+
+#define __assign_cpu(cpu, mask, val)	\
+	__assign_bit(cpumask_check(cpu), cpumask_bits(mask), (val))
 
 #define set_cpu_possible(cpu, possible)	assign_cpu((cpu), &__cpu_possible_mask, (possible))
 #define set_cpu_enabled(cpu, enabled)	assign_cpu((cpu), &__cpu_enabled_mask, (enabled))

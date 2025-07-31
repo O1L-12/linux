@@ -12,6 +12,7 @@
 
 #include "fbnic_csr.h"
 #include "fbnic_fw.h"
+#include "fbnic_fw_log.h"
 #include "fbnic_hw_stats.h"
 #include "fbnic_mac.h"
 #include "fbnic_rpc.h"
@@ -19,6 +20,7 @@
 struct fbnic_napi_vector;
 
 #define FBNIC_MAX_NAPI_VECTORS		128u
+#define FBNIC_MBX_CMPL_SLOTS		4
 
 struct fbnic_dev {
 	struct device *dev;
@@ -42,7 +44,7 @@ struct fbnic_dev {
 
 	struct fbnic_fw_mbx mbx[FBNIC_IPC_MBX_INDICES];
 	struct fbnic_fw_cap fw_cap;
-	struct fbnic_fw_completion *cmpl_data;
+	struct fbnic_fw_completion *cmpl_data[FBNIC_MBX_CMPL_SLOTS];
 	/* Lock protecting Tx Mailbox queue to prevent possible races */
 	spinlock_t fw_tx_lock;
 
@@ -81,6 +83,11 @@ struct fbnic_dev {
 
 	/* Local copy of hardware statistics */
 	struct fbnic_hw_stats hw_stats;
+
+	/* Lock protecting access to hw_stats */
+	spinlock_t hw_stats_lock;
+
+	struct fbnic_fw_log fw_log;
 };
 
 /* Reserve entry 0 in the MSI-X "others" array until we have filled all
