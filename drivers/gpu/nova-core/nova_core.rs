@@ -9,6 +9,7 @@ mod fb;
 mod firmware;
 mod gfw;
 mod gpu;
+mod gsp;
 mod regs;
 mod util;
 mod vbios;
@@ -18,7 +19,7 @@ pub(crate) const MODULE_NAME: &kernel::str::CStr = <LocalModule as kernel::Modul
 kernel::module_pci_driver! {
     type: driver::NovaCore,
     name: "NovaCore",
-    author: "Danilo Krummrich",
+    authors: ["Danilo Krummrich"],
     description: "Nova Core GPU driver",
     license: "GPL v2",
     firmware: [],

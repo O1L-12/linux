@@ -7,6 +7,8 @@
  *  Copyright (C) 1991-2002  Linus Torvalds
  *  Copyright (C) 1998-2024  Ingo Molnar, Red Hat
  */
+#define INSTANTIATE_EXPORTED_MIGRATE_DISABLE
+#include <linux/sched.h>
 #include <linux/highmem.h>
 #include <linux/hrtimer_api.h>
 #include <linux/ktime_api.h>
@@ -917,7 +919,7 @@ void hrtick_start(struct rq *rq, u64 delay)
 	 * doesn't make sense and can cause timer DoS.
 	 */
 	delta = max_t(s64, delay, 10000LL);
-	rq->hrtick_time = ktime_add_ns(timer->base->get_time(), delta);
+	rq->hrtick_time = ktime_add_ns(hrtimer_cb_get_time(timer), delta);
 
 	if (rq == this_rq())
 		__hrtick_restart(rq);
@@ -2381,28 +2383,7 @@ static void migrate_disable_switch(struct rq *rq, struct task_struct *p)
 	__do_set_cpus_allowed(p, &ac);
 }
 
-void migrate_disable(void)
-{
-	struct task_struct *p = current;
-
-	if (p->migration_disabled) {
-#ifdef CONFIG_DEBUG_PREEMPT
-		/*
-		 *Warn about overflow half-way through the range.
-		 */
-		WARN_ON_ONCE((s16)p->migration_disabled < 0);
-#endif
-		p->migration_disabled++;
-		return;
-	}
-
-	guard(preempt)();
-	this_rq()->nr_pinned++;
-	p->migration_disabled = 1;
-}
-EXPORT_SYMBOL_GPL(migrate_disable);
-
-void migrate_enable(void)
+void ___migrate_enable(void)
 {
 	struct task_struct *p = current;
 	struct affinity_context ac = {
@@ -2410,35 +2391,19 @@ void migrate_enable(void)
 		.flags     = SCA_MIGRATE_ENABLE,
 	};
 
-#ifdef CONFIG_DEBUG_PREEMPT
-	/*
-	 * Check both overflow from migrate_disable() and superfluous
-	 * migrate_enable().
-	 */
-	if (WARN_ON_ONCE((s16)p->migration_disabled <= 0))
-		return;
-#endif
+	__set_cpus_allowed_ptr(p, &ac);
+}
+EXPORT_SYMBOL_GPL(___migrate_enable);
 
-	if (p->migration_disabled > 1) {
-		p->migration_disabled--;
-		return;
-	}
+void migrate_disable(void)
+{
+	__migrate_disable();
+}
+EXPORT_SYMBOL_GPL(migrate_disable);
 
-	/*
-	 * Ensure stop_task runs either before or after this, and that
-	 * __set_cpus_allowed_ptr(SCA_MIGRATE_ENABLE) doesn't schedule().
-	 */
-	guard(preempt)();
-	if (p->cpus_ptr != &p->cpus_mask)
-		__set_cpus_allowed_ptr(p, &ac);
-	/*
-	 * Mustn't clear migration_disabled() until cpus_ptr points back at the
-	 * regular cpus_mask, otherwise things that race (eg.
-	 * select_fallback_rq) get confused.
-	 */
-	barrier();
-	p->migration_disabled = 0;
-	this_rq()->nr_pinned--;
+void migrate_enable(void)
+{
+	__migrate_enable();
 }
 EXPORT_SYMBOL_GPL(migrate_enable);
 
@@ -4472,7 +4437,7 @@ int wake_up_state(struct task_struct *p, unsigned int state)
  * __sched_fork() is basic setup which is also used by sched_init() to
  * initialize the boot CPU's idle task.
  */
-static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
+static void __sched_fork(u64 clone_flags, struct task_struct *p)
 {
 	p->on_rq			= 0;
 
@@ -4490,6 +4455,9 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	p->se.cfs_rq			= NULL;
+#ifdef CONFIG_CFS_BANDWIDTH
+	init_cfs_throttle_work(p);
+#endif
 #endif
 
 #ifdef CONFIG_SCHEDSTATS
@@ -4707,7 +4675,7 @@ late_initcall(sched_core_sysctl_init);
 /*
  * fork()/clone()-time setup:
  */
-int sched_fork(unsigned long clone_flags, struct task_struct *p)
+int sched_fork(u64 clone_flags, struct task_struct *p)
 {
 	__sched_fork(clone_flags, p);
 	/*
@@ -8603,10 +8571,12 @@ int sched_cpu_dying(unsigned int cpu)
 	sched_tick_stop(cpu);
 
 	rq_lock_irqsave(rq, &rf);
+	update_rq_clock(rq);
 	if (rq->nr_running != 1 || rq_has_pinned_tasks(rq)) {
 		WARN(true, "Dying CPU not properly vacated!");
 		dump_rq_tasks(rq, KERN_WARNING);
 	}
+	dl_server_stop(&rq->fair_server);
 	rq_unlock_irqrestore(rq, &rf);
 
 	calc_load_migrate(rq);
@@ -9362,8 +9332,6 @@ static void cpu_cgroup_attach(struct cgroup_taskset *tset)
 
 	cgroup_taskset_for_each(task, css, tset)
 		sched_move_task(task, false);
-
-	scx_cgroup_finish_attach();
 }
 
 static void cpu_cgroup_cancel_attach(struct cgroup_taskset *tset)
@@ -9551,7 +9519,7 @@ static unsigned long tg_weight(struct task_group *tg)
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	return scale_load_down(tg->shares);
 #else
-	return sched_weight_from_cgroup(tg->scx_weight);
+	return sched_weight_from_cgroup(tg->scx.weight);
 #endif
 }
 
@@ -9638,7 +9606,7 @@ static int tg_set_cfs_bandwidth(struct task_group *tg,
 
 		guard(rq_lock_irq)(rq);
 		cfs_rq->runtime_enabled = runtime_enabled;
-		cfs_rq->runtime_remaining = 0;
+		cfs_rq->runtime_remaining = 1;
 
 		if (cfs_rq->throttled)
 			unthrottle_cfs_rq(cfs_rq);
@@ -9815,7 +9783,9 @@ static int cpu_cfs_local_stat_show(struct seq_file *sf, void *v)
 
 	return 0;
 }
+#endif /* CONFIG_CFS_BANDWIDTH */
 
+#ifdef CONFIG_GROUP_SCHED_BANDWIDTH
 const u64 max_bw_quota_period_us = 1 * USEC_PER_SEC; /* 1s */
 static const u64 min_bw_quota_period_us = 1 * USEC_PER_MSEC; /* 1ms */
 /* More than 203 days if BW_SHIFT equals 20. */
@@ -9824,12 +9794,21 @@ static const u64 max_bw_runtime_us = MAX_BW;
 static void tg_bandwidth(struct task_group *tg,
 			 u64 *period_us_p, u64 *quota_us_p, u64 *burst_us_p)
 {
+#ifdef CONFIG_CFS_BANDWIDTH
 	if (period_us_p)
 		*period_us_p = tg_get_cfs_period(tg);
 	if (quota_us_p)
 		*quota_us_p = tg_get_cfs_quota(tg);
 	if (burst_us_p)
 		*burst_us_p = tg_get_cfs_burst(tg);
+#else /* !CONFIG_CFS_BANDWIDTH */
+	if (period_us_p)
+		*period_us_p = tg->scx.bw_period_us;
+	if (quota_us_p)
+		*quota_us_p = tg->scx.bw_quota_us;
+	if (burst_us_p)
+		*burst_us_p = tg->scx.bw_burst_us;
+#endif /* CONFIG_CFS_BANDWIDTH */
 }
 
 static u64 cpu_period_read_u64(struct cgroup_subsys_state *css,
@@ -9845,6 +9824,7 @@ static int tg_set_bandwidth(struct task_group *tg,
 			    u64 period_us, u64 quota_us, u64 burst_us)
 {
 	const u64 max_usec = U64_MAX / NSEC_PER_USEC;
+	int ret = 0;
 
 	if (tg == &root_task_group)
 		return -EINVAL;
@@ -9882,7 +9862,12 @@ static int tg_set_bandwidth(struct task_group *tg,
 					burst_us + quota_us > max_bw_runtime_us))
 		return -EINVAL;
 
-	return tg_set_cfs_bandwidth(tg, period_us, quota_us, burst_us);
+#ifdef CONFIG_CFS_BANDWIDTH
+	ret = tg_set_cfs_bandwidth(tg, period_us, quota_us, burst_us);
+#endif /* CONFIG_CFS_BANDWIDTH */
+	if (!ret)
+		scx_group_set_bandwidth(tg, period_us, quota_us, burst_us);
+	return ret;
 }
 
 static s64 cpu_quota_read_s64(struct cgroup_subsys_state *css,
@@ -9935,7 +9920,7 @@ static int cpu_burst_write_u64(struct cgroup_subsys_state *css,
 	tg_bandwidth(tg, &period_us, &quota_us, NULL);
 	return tg_set_bandwidth(tg, period_us, quota_us, burst_us);
 }
-#endif /* CONFIG_CFS_BANDWIDTH */
+#endif /* CONFIG_GROUP_SCHED_BANDWIDTH */
 
 #ifdef CONFIG_RT_GROUP_SCHED
 static int cpu_rt_runtime_write(struct cgroup_subsys_state *css,
@@ -9995,7 +9980,7 @@ static struct cftype cpu_legacy_files[] = {
 		.write_s64 = cpu_idle_write_s64,
 	},
 #endif
-#ifdef CONFIG_CFS_BANDWIDTH
+#ifdef CONFIG_GROUP_SCHED_BANDWIDTH
 	{
 		.name = "cfs_period_us",
 		.read_u64 = cpu_period_read_u64,
@@ -10011,6 +9996,8 @@ static struct cftype cpu_legacy_files[] = {
 		.read_u64 = cpu_burst_read_u64,
 		.write_u64 = cpu_burst_write_u64,
 	},
+#endif
+#ifdef CONFIG_CFS_BANDWIDTH
 	{
 		.name = "stat",
 		.seq_show = cpu_cfs_stat_show,
@@ -10224,7 +10211,7 @@ static int __maybe_unused cpu_period_quota_parse(char *buf, u64 *period_us_p,
 	return 0;
 }
 
-#ifdef CONFIG_CFS_BANDWIDTH
+#ifdef CONFIG_GROUP_SCHED_BANDWIDTH
 static int cpu_max_show(struct seq_file *sf, void *v)
 {
 	struct task_group *tg = css_tg(seq_css(sf));
@@ -10271,7 +10258,7 @@ static struct cftype cpu_files[] = {
 		.write_s64 = cpu_idle_write_s64,
 	},
 #endif
-#ifdef CONFIG_CFS_BANDWIDTH
+#ifdef CONFIG_GROUP_SCHED_BANDWIDTH
 	{
 		.name = "max",
 		.flags = CFTYPE_NOT_ON_ROOT,
